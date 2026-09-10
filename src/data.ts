@@ -1,4 +1,4 @@
-import type {AnomalyStatus,Batch,Review,Sample,Store} from './types';
+import type {AnomalyStatus,Batch,Recipe,Review,Sample,Store} from './types';
 export const STORE_KEY='kiln-review-console-v1';
 export type CompareNode={minute:number;current:number;reference:number;diff:number};
 export type CompareResult={kind:'ok';nodes:CompareNode[];maxDiff:number;maxMinute:number;avgDiff:number}|{kind:'error';reason:string};
@@ -34,3 +34,40 @@ export function parseGapOverride(raw:string):{ok:true;value:number}|{ok:false;re
 // 清洗存档中的异常间隔字段（历史版本可能把 Infinity 序列化成 null）：非法覆盖值删除后按统一值处理，不影响其他数据
 export function sanitizeStore(x:Store):Store{x.batches.forEach(b=>{const v=b.gapMinutesOverride as unknown;if(v!==undefined&&!(typeof v==='number'&&Number.isSafeInteger(v as number)&&(v as number)>=1))delete b.gapMinutesOverride});if(!Number.isFinite(x.gapMinutes)||!Number.isSafeInteger(x.gapMinutes))x.gapMinutes=45;return x}
 export function anomalies(batch:Batch,target:number,tolerance:number,gapMinutes:number){const out:{key:string;time:string;value:string;reason:string}[]=[];batch.samples.forEach((p,i)=>{if(Math.abs(p.temperature-target)>tolerance)out.push({key:`range-${p.time}`,time:p.time,value:`${p.temperature} °C`,reason:`超出 ${target} ± ${tolerance} °C`});if(i){const gap=(Date.parse(p.time)-Date.parse(batch.samples[i-1].time))/60000;if(gap>gapMinutes)out.push({key:`gap-${p.time}`,time:p.time,value:`${Math.round(gap)} 分钟`,reason:`采样间隔超过 ${gapMinutes} 分钟`})}});return out}
+export type ScheduleDraft={id?:string;kiln:string;recipeId:string;start:string};
+export type Occupancy={batchId:string;name:string;startMs:number;endMs:number};
+export type ScheduleConflict={current:Occupancy;other:Occupancy;overlapStartMs:number;overlapMinutes:number};
+const positiveDuration=(recipe:Recipe|undefined)=>!!recipe&&Number.isFinite(recipe.duration)&&recipe.duration>0;
+function batchOccupancy(b:Batch,recipes:Recipe[]):Occupancy|null{
+  const recipe=recipes.find(r=>r.id===b.recipeId);
+  const startMs=Date.parse(b.start);
+  if(!b.kiln||!Number.isFinite(startMs)||!positiveDuration(recipe))return null;
+  return {batchId:b.id,name:b.name,startMs,endMs:startMs+recipe!.duration*60000};
+}
+function pairConflict(current:Occupancy,other:Occupancy):ScheduleConflict|null{
+  const overlapStartMs=Math.max(current.startMs,other.startMs),overlapEndMs=Math.min(current.endMs,other.endMs);
+  return overlapStartMs<overlapEndMs?{current,other,overlapStartMs,overlapMinutes:Math.round((overlapEndMs-overlapStartMs)/60000)}:null;
+}
+const compareBatchId=(a:string,b:string)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'});
+const conflictOrder=(c:ScheduleConflict):[number,string,string]=>[c.overlapStartMs,c.current.batchId,c.other.batchId];
+// 窑炉占用按左闭右开比较：endA===startB 属于首尾相接，可以连续生产；只有 max(start)<min(end) 才是真重叠。
+export function findScheduleConflicts(recipes:Recipe[],batches:Batch[],draft?:ScheduleDraft):ScheduleConflict[]{
+  const kilnOf=new Map(batches.map(b=>[b.id,b.kiln]));
+  const occupied=batches.map(b=>({b,o:batchOccupancy(b,recipes)})).filter((x):x is {b:Batch;o:Occupancy}=>!!x.o&&(!draft?.id||x.b.id!==draft.id));
+  const out:ScheduleConflict[]=[];
+  const draftRecipe=draft?recipes.find(r=>r.id===draft.recipeId):undefined;
+  const draftStart=draft?Date.parse(draft.start):NaN;
+  const draftO:Occupancy|null=draft&&draft.kiln&&Number.isFinite(draftStart)&&positiveDuration(draftRecipe)
+    ?{batchId:draft.id||'',name:'当前表单',startMs:draftStart,endMs:draftStart+draftRecipe!.duration*60000}:null;
+  if(draft&&draftO){
+    occupied.forEach(({o})=>{if((kilnOf.get(o.batchId)||'').trim()===draft.kiln.trim()){const c=pairConflict(draftO,o);if(c)out.push(c)}});
+  }else{
+    occupied.forEach(({o:a},i)=>occupied.slice(i+1).forEach(({o:b})=>{if((kilnOf.get(a.batchId)||'').trim()===(kilnOf.get(b.batchId)||'').trim()){const ab=pairConflict(a,b),ba=ab&&{...ab,current:ab.other,other:ab.current};if(ab&&ba)out.push(ab,ba)}}));
+  }
+  // 稳定排序：重叠起点优先，起点相同时按双方批次编号确定顺序。
+  return out.sort((a,b)=>{const x=conflictOrder(a),y=conflictOrder(b);return x[0]-y[0]||compareBatchId(x[1],y[1])||compareBatchId(x[2],y[2])});
+}
+export const firstScheduleConflict=(recipes:Recipe[],batches:Batch[],draft:ScheduleDraft)=>findScheduleConflicts(recipes,batches,draft)[0]||null;
+export const conflictingBatchIds=(recipes:Recipe[],batches:Batch[])=>new Set(findScheduleConflicts(recipes,batches).flatMap(c=>[c.current.batchId,c.other.batchId]));
+const pad2=(v:number)=>String(v).padStart(2,'0');
+export const formatScheduleTime=(ms:number)=>{const d=new Date(ms);return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`};
