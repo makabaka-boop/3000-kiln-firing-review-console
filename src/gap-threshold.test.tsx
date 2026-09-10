@@ -85,7 +85,7 @@ describe('批次自定义最大采样间隔',()=>{
 
     // 全局值改为 4 分钟（5、10、5 三个间隔全部超限）
     goto('数据与设置');
-    fireEvent.change(document.querySelector('input[type=number]') as HTMLInputElement,{target:{value:'4'}});
+    const globalInput=screen.getByLabelText('工作台统一最大采样间隔分钟数');fireEvent.change(globalInput,{target:{value:'4'}});fireEvent.blur(globalInput);
 
     goto('概览');
     expect(pendingCount()).toBe('3'); // 仅 b 联动：3 条异常
@@ -134,7 +134,7 @@ describe('批次自定义最大采样间隔',()=>{
     openBatch(/自定义批次/);
     expect(anomalyRows()).toHaveLength(0);
     goto('数据与设置');
-    fireEvent.change(document.querySelector('input[type=number]') as HTMLInputElement,{target:{value:'9'}});
+    const globalInput=screen.getByLabelText('工作台统一最大采样间隔分钟数');fireEvent.change(globalInput,{target:{value:'9'}});fireEvent.blur(globalInput);
     openBatch(/自定义批次/);
     expect(anomalyRows()).toHaveLength(0); // 自定义期间不联动
     expect(screen.getByTestId('gap-source').textContent).toContain('本批次自定义 10 分钟');
@@ -146,6 +146,42 @@ describe('批次自定义最大采样间隔',()=>{
     expect(screen.getByText(/采样间隔超过 9 分钟/)).toBeInTheDocument();
     goto('概览');
     expect(pendingCount()).toBe('1'); // 详情 1 条、概览待复核 1，一致
+  });
+
+  it('超长整数分钟数就地提示且不写入，刷新后本地数据保持原样',async()=>{
+    seed(5,[batch('a','唯一批次')]);
+    render(<App/>);
+    openBatch(/唯一批次/);
+    expect(anomalyRows()).toHaveLength(1);
+    startCustom();
+    saveCustom('9'.repeat(400)); // Number() 会得到 Infinity
+    expect(screen.getByTestId('gap-error').textContent).toContain('分钟数过大');
+    expect(savedBatch('a').gapMinutesOverride).toBeUndefined();
+    // 统计不刷新、JSON 中没有 Infinity 被序列化成 null 的痕迹
+    expect(anomalyRows()).toHaveLength(1);
+    expect(localStorage.getItem(STORE_KEY)!).not.toContain('null');
+
+    // 刷新后批次与采样完好，仍按统一值判定
+    cleanup();render(<App/>);
+    openBatch(/唯一批次/);
+    expect(anomalyRows()).toHaveLength(1);
+    expect(screen.getByTestId('gap-source').textContent).toContain('工作台统一值 5 分钟');
+    expect(savedBatch('a').samples).toHaveLength(4);
+  });
+
+  it('历史损坏存档（覆盖值被序列化为 null）加载时清洗而非整体丢失',async()=>{
+    const corrupted={version:1,gapMinutes:5,recipes:[recipe],batches:[{...batch('a','损坏批次'),gapMinutesOverride:null},{...batch('b','正常批次',{gapMinutesOverride:10}),id:'b2',name:'自定义批次'}]};
+    localStorage.setItem(STORE_KEY,JSON.stringify(corrupted));
+    render(<App/>);
+    openBatch(/损坏批次/);
+    // 损坏覆盖值被删除，按统一值 5 分钟判定（10 分钟间隔异常仍在）
+    expect(anomalyRows()).toHaveLength(1);
+    expect(screen.getByTestId('gap-source').textContent).toContain('工作台统一值 5 分钟');
+    expect(savedBatch('a').gapMinutesOverride).toBeUndefined();
+    // 其他批次数据完好，合法覆盖值保留
+    openBatch(/自定义批次/);
+    expect(anomalyRows()).toHaveLength(0);
+    expect(savedBatch('b2').gapMinutesOverride).toBe(10);
   });
 
   it('旧本地数据缺少间隔覆盖字段时按统一值加载',async()=>{
