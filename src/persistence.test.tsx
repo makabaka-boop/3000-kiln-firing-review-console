@@ -4,7 +4,8 @@ import App from './App';
 import {initialStore,isStore,STORE_KEY} from './data';
 import type {Batch,Store} from './types';
 
-const mk=(id:string,ref?:string):Batch=>({...(ref?{referenceBatchId:ref}:{}),id,name:id,kiln:'K1',recipeId:'r1',start:'2026-09-01T08:00',notes:'',samples:[{time:'2026-09-01T08:00',temperature:20},{time:'2026-09-01T08:10',temperature:90}],reviews:{}});
+const wallStamp=(start:string,min:number)=>{const d=new Date(Date.parse(start)+min*60000);const p=(v:number)=>String(v).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`};
+const mk=(id:string,start='2026-09-01T08:00',ref?:string):Batch=>({...(ref?{referenceBatchId:ref}:{}),id,name:id,kiln:'K1',recipeId:'r1',start,notes:'',samples:[{time:start,temperature:20},{time:wallStamp(start,10),temperature:90}],reviews:{}});
 
 beforeEach(()=>{localStorage.clear();vi.stubGlobal('confirm',()=>true)});
 afterEach(()=>{cleanup();vi.unstubAllGlobals();vi.restoreAllMocks()});
@@ -27,7 +28,7 @@ describe('数据校验与迁移',()=>{
     expect(screen.getByText('九月青瓷 A 批')).toBeInTheDocument();
   });
   it('悬空参考编号（批次被删除）加载为具体错误而非崩溃，且旧摘要不显示',()=>{
-    const store:Store={version:1,gapMinutes:45,recipes:[{id:'r1',name:'x',target:100,tolerance:5,duration:60}],batches:[mk('cur','gone')]};
+    const store:Store={version:1,gapMinutes:45,recipes:[{id:'r1',name:'x',target:100,tolerance:5,duration:60}],batches:[mk('cur','2026-09-01T08:00','gone')]};
     localStorage.setItem(STORE_KEY,JSON.stringify(store));
     render(<App/>);
     fireEvent.click(screen.getByRole('button',{name:'烧成批次'}));
@@ -42,7 +43,7 @@ describe('数据校验与迁移',()=>{
     let exported='';
     vi.stubGlobal('URL',{...URL,createObjectURL:(blob:Blob)=>{readText(blob).then(t=>{exported=t});return 'blob:x'},revokeObjectURL:()=>{}});
     HTMLAnchorElement.prototype.click=function(){(this as any).dispatchEvent(new Event('click'))};
-    const store:Store={version:1,gapMinutes:45,recipes:[{id:'r1',name:'青瓷',target:100,tolerance:5,duration:60}],batches:[mk('cur'),mk('ref')]};
+    const store:Store={version:1,gapMinutes:45,recipes:[{id:'r1',name:'青瓷',target:100,tolerance:5,duration:60}],batches:[mk('cur'),mk('ref','2026-08-01T08:00')]};
     localStorage.setItem(STORE_KEY,JSON.stringify(store));
     render(<App/>);
     // 选择参考批次

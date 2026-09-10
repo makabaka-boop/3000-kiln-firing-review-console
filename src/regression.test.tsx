@@ -22,15 +22,15 @@ describe('原有行为回归',()=>{
     pickFile(csv(),new File(['时间,温度\n2026-09-01 08:00,1260\n2026-09-01 09:00,1290\n2026-09-01 10:00,1310'],'ok.csv',{type:'text/csv'}));
     expect(await screen.findByText('已导入 3 个采样点')).toBeInTheDocument();
     expect(screen.getByRole('img',{name:'实际温度与目标范围折线图'})).toBeInTheDocument();
-    const saved=JSON.parse(localStorage.getItem(STORE_KEY)!) as Store;
-    expect(saved.batches[0].samples).toHaveLength(3);
+    await waitFor(()=>expect((JSON.parse(localStorage.getItem(STORE_KEY)!) as Store).batches[0].samples).toHaveLength(3));
     // 越界异常自动识别（1290、1310 超出 1280±15）
     expect(await screen.findAllByText(/超出 1280 ± 15/)).toHaveLength(2);
     // 非法 CSV：时间倒退且温度非数字，带行号，不覆盖原记录
     const csvInput=csv();
     Object.defineProperty(csvInput,'value',{writable:true,value:''});
     pickFile(csvInput,new File(['时间,温度\n2026-09-01 10:00,abc\n2026-09-01 09:00,1200'],'bad.csv',{type:'text/csv'}));
-    const bad=await screen.findByRole('alert');
+    await waitFor(()=>expect(screen.getByRole('alert').textContent).toContain('第 2 行'));
+    const bad=screen.getByRole('alert');
     expect(bad.textContent).toContain('第 2 行');
     expect(bad.textContent).toContain('第 3 行');
     expect((JSON.parse(localStorage.getItem(STORE_KEY)!) as Store).batches[0].samples).toHaveLength(3);

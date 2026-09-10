@@ -104,15 +104,28 @@ describe('历史曲线对比算法',()=>{
   });
 });
 describe('对比候选批次',()=>{
-  it('只列同配方、至少 2 个有效采样点且非自身的批次',()=>{
+  it('只列同配方、开始更早、至少 2 个有效采样点且非自身的批次',()=>{
     const cur=mkBatch('cur',start,[[0,1],[5,2]]);
     const store:Store={version:1,gapMinutes:45,recipes:[],batches:[
       cur,
-      mkBatch('same-ok',start,[[0,1],[1,2]]),
-      mkBatch('same-few',start,[[0,1]]),
-      mkBatch('other-recipe',start,[[0,1],[1,2]],'r9'),
+      mkBatch('earlier-ok','2026-08-01T08:00',[[0,1],[1,2]]),
+      mkBatch('same-start',start,[[0,1],[1,2]]),
+      mkBatch('later','2026-10-01T08:00',[[0,1],[1,2]]),
+      mkBatch('earlier-few','2026-08-01T08:00',[[0,1]]),
+      mkBatch('earlier-other-recipe','2026-08-01T08:00',[[0,1],[1,2]],'r9'),
     ]};
-    expect(compareCandidates(store,cur).map(b=>b.id)).toEqual(['same-ok']);
+    expect(compareCandidates(store,cur).map(b=>b.id)).toEqual(['earlier-ok']);
+  });
+  it('同一时刻重复的采样点只计一次，不能满足两点条件',()=>{
+    const dup=mkBatch('dup','2026-08-01T08:00',[[5,100],[5,200],[9,300]]);
+    expect(validPoints(dup).map(p=>p.minute)).toEqual([5,9]);
+    expect(validPoints(dup)[0].temperature).toBe(100);
+    const onlyDup=mkBatch('only-dup','2026-08-01T08:00',[[5,100],[5,200]]);
+    expect(validPoints(onlyDup)).toHaveLength(1);
+    const cur=mkBatch('cur',start,[[0,1],[5,2]]);
+    expect(compareCandidates({version:1,gapMinutes:45,recipes:[],batches:[cur,onlyDup]},cur)).toEqual([]);
+    const r=compareCurves(cur,onlyDup);
+    expect(r).toEqual({kind:'error',reason:expect.stringContaining('参考批次有效采样点不足')});
   });
 });
 describe('时区：东八区 CSV 导入',()=>{
