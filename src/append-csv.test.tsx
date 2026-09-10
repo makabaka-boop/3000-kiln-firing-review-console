@@ -1,7 +1,7 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import App from './App';
-import {appendCsv,STORE_KEY} from './data';
+import {appendCsv,parseCsv,STORE_KEY} from './data';
 import type {Batch,Recipe,Store} from './types';
 
 const recipes:Recipe[]=[{id:'r1',name:'青瓷还原烧',target:1280,tolerance:15,duration:720}];
@@ -44,6 +44,22 @@ describe('appendCsv 合并逻辑',()=>{
   it('文件内部时间重复沿用现有校验，不产生可写入记录',()=>{
     const r=appendCsv('时间,温度\n2026-09-10 08:05,1272\n2026-09-10 08:05,1273',existing);
     expect(r.errors[0]).toContain('第 3 行');
+    expect(r.errors[0]).toContain('时间点重复');
+    expect(r.samples).toEqual([]);
+  });
+  it('同一分钟的不同秒数视为重复时间点',()=>{
+    const r=appendCsv('时间,温度\n2026-09-10 08:05:15,1265\n2026-09-10 08:05:45,1270',existing);
+    expect(r.errors[0]).toContain('第 3 行');
+    expect(r.errors[0]).toContain('时间点重复');
+    expect(r.samples).toEqual([]);
+  });
+  it('与现有采样同一分钟不同秒数视为冲突',()=>{
+    const r=appendCsv('时间,温度\n2026-09-10 08:00:30,1261',existing);
+    expect(r.errors).toEqual(['第 2 行：时间点 2026-09-10 08:00 已存在于当前批次']);
+    expect(r.samples).toEqual([]);
+  });
+  it('整批替换同样拒绝同一分钟的不同秒数',()=>{
+    const r=parseCsv('时间,温度\n2026-09-10 08:05:15,1265\n2026-09-10 08:05:45,1270');
     expect(r.errors[0]).toContain('时间点重复');
     expect(r.samples).toEqual([]);
   });
@@ -108,6 +124,52 @@ describe('批次详情：追加 CSV',()=>{
     expect(alert.textContent).toContain('时间点重复');
     expect(savedCur().samples).toEqual(store.batches[0].samples);
     expect(screen.getAllByLabelText('异常状态')).toHaveLength(1);
+  });
+
+  it('连续追加两个文件且读取时间重叠时，两个文件的记录都保留',async()=>{
+    await openDetail();
+    // 不等待第一个文件处理完成，连续选择两个文件（读取时间重叠）
+    pickFile(appendInput(),csv('a.csv','2026-09-10 08:05,1265\n2026-09-10 08:10,1270'));
+    pickFile(appendInput(),csv('b.csv','2026-09-10 08:30,1285\n2026-09-10 08:40,1290'));
+    // 后完成的读取不会覆盖先追加的记录：6 个采样点全部保留且升序
+    await waitFor(()=>expect(savedCur().samples.map(p=>p.time)).toEqual([s0,wall(s0,5),wall(s0,10),wall(s0,20),wall(s0,30),wall(s0,40)]));
+    expect(savedCur().samples.map(p=>p.temperature)).toEqual([1260,1265,1270,1280,1285,1290]);
+    // 复核与历史参考选择保留
+    expect(savedCur().reviews[`range-${s0}`]).toEqual({status:'equipment',note:'热电偶松动'});
+    expect(savedCur().referenceBatchId).toBe('ref');
+    await waitFor(()=>expect(screen.getAllByLabelText('异常状态')).toHaveLength(1));
+  });
+
+  it('连续追加两个文件且时间点互相冲突时，先追加的记录保留、后到的因冲突被拒绝',async()=>{
+    await openDetail();
+    pickFile(appendInput(),csv('a.csv','2026-09-10 08:05,1265'));
+    pickFile(appendInput(),csv('b.csv','2026-09-10 08:05,1270'));
+    // 先到者合入，后到者基于最新批次状态检测到冲突
+    const alert=await screen.findByRole('alert');
+    await waitFor(()=>expect(alert.textContent).toContain('已存在于当前批次'));
+    await waitFor(()=>expect(savedCur().samples).toHaveLength(3));
+    expect(savedCur().samples.map(p=>p.time)).toEqual([s0,wall(s0,5),wall(s0,20)]);
+  });
+
+  it('追加文件含同一分钟的不同秒数时提示时间点重复并保持原数据',async()=>{
+    await openDetail();
+    pickFile(appendInput(),csv('sec.csv','2026-09-10 08:05:15,1265\n2026-09-10 08:05:45,1270'));
+    const alert=await screen.findByRole('alert');
+    expect(alert.textContent).toContain('第 3 行');
+    expect(alert.textContent).toContain('时间点重复');
+    expect(savedCur().samples).toHaveLength(2);
+    expect(screen.getAllByLabelText('异常状态')).toHaveLength(1);
+  });
+
+  it('追加文件的时间与现有采样同一分钟不同秒数时提示冲突并保持原数据',async()=>{
+    await openDetail();
+    pickFile(appendInput(),csv('sec2.csv','2026-09-10 08:00:30,1261'));
+    const alert=await screen.findByRole('alert');
+    expect(alert.textContent).toContain('第 2 行');
+    expect(alert.textContent).toContain('2026-09-10 08:00');
+    expect(alert.textContent).toContain('已存在于当前批次');
+    expect(savedCur().samples).toHaveLength(2);
+    expect(savedCur().reviews[`range-${s0}`]).toEqual({status:'equipment',note:'热电偶松动'});
   });
 
   it('追加文件格式错误时不发生部分写入',async()=>{
