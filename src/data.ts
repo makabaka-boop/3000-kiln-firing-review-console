@@ -1,4 +1,4 @@
-import type {Batch,Sample,Store} from './types';
+import type {AnomalyStatus,Batch,Review,Sample,Store} from './types';
 export const STORE_KEY='kiln-review-console-v1';
 export type CompareNode={minute:number;current:number;reference:number;diff:number};
 export type CompareResult={kind:'ok';nodes:CompareNode[];maxDiff:number;maxMinute:number;avgDiff:number}|{kind:'error';reason:string};
@@ -10,7 +10,14 @@ export const compareCandidates=(store:Store,batch:Batch)=>store.batches.filter(b
 export const referenceStatus=(store:Store,batch:Batch):{ref?:Batch;reason?:string}=>{const id=batch.referenceBatchId;if(!id)return {};const ref=store.batches.find(b=>b.id===id);if(!ref)return {reason:'所选参考批次已被删除，请改选其他批次或清除对比。'};if(ref.id===batch.id)return {ref,reason:'参考批次不能是当前批次自身，该引用已不可用。'};if(ref.recipeId!==batch.recipeId)return {ref,reason:'参考批次与当前批次的配方已不一致，该参考批次已不再可用。'};return {ref}};
 export const initialStore:Store={version:1,gapMinutes:45,recipes:[{id:'r1',name:'青瓷还原烧',target:1280,tolerance:15,duration:720},{id:'r2',name:'素烧',target:900,tolerance:20,duration:480}],batches:[{id:'b1',name:'九月青瓷 A 批',kiln:'K-02',recipeId:'r1',start:'2026-09-08T08:30',notes:'窑位较满，重点关注升温末段。',samples:[{time:'2026-09-08T08:30',temperature:26},{time:'2026-09-08T10:00',temperature:310},{time:'2026-09-08T12:00',temperature:690},{time:'2026-09-08T15:00',temperature:1110},{time:'2026-09-08T18:00',temperature:1262},{time:'2026-09-08T20:30',temperature:1287}],reviews:{}}]};
 export const uid=()=>Math.random().toString(36).slice(2,10);
-export function isStore(x:unknown):x is Store{if(!x||typeof x!=='object')return false;const s=x as Store;const batchOk=(b:Batch)=>typeof b.id==='string'&&typeof b.name==='string'&&typeof b.kiln==='string'&&typeof b.recipeId==='string'&&Array.isArray(b.samples)&&b.samples.every(p=>typeof p.time==='string'&&typeof p.temperature==='number');return s.version===1&&Array.isArray(s.recipes)&&Array.isArray(s.batches)&&s.recipes.every(r=>typeof r.id==='string'&&typeof r.name==='string'&&typeof r.target==='number'&&typeof r.tolerance==='number'&&typeof r.duration==='number')&&s.batches.every(batchOk)}
+const REVIEW_STATUSES:AnomalyStatus[]=['pending','equipment','process','accepted'];
+// 复核记录必须是非空对象且每条状态为已知值：记录为空会让统计页崩溃，未知状态会让异常从待复核中消失，此类备份整份拒绝
+const reviewsOk=(r:unknown)=>!!r&&typeof r==='object'&&!Array.isArray(r)&&Object.values(r).every(v=>!!v&&typeof v==='object'&&REVIEW_STATUSES.includes((v as Review).status)&&typeof (v as Review).note==='string');
+// 采样时间必须按升序排列（允许同一时刻重复）：逆序备份的正向超限间隔会被漏判，整份拒绝
+const samplesOrdered=(samples:Sample[])=>samples.every((p,i)=>{if(!i)return true;const prev=Date.parse(samples[i-1].time),cur=Date.parse(p.time);return!Number.isFinite(prev)||!Number.isFinite(cur)||cur>=prev});
+// 统一间隔若以数字给出，必须是不小于 1 的安全整数：0 或负数会把所有正向间隔误判为异常，整份拒绝（null/缺失等非数字仍由 sanitizeStore 修复）
+const gapOk=(g:unknown)=>typeof g!=='number'||!Number.isSafeInteger(g)||g>=1;
+export function isStore(x:unknown):x is Store{if(!x||typeof x!=='object')return false;const s=x as Store;const batchOk=(b:Batch)=>typeof b.id==='string'&&typeof b.name==='string'&&typeof b.kiln==='string'&&typeof b.recipeId==='string'&&Array.isArray(b.samples)&&b.samples.every(p=>typeof p.time==='string'&&typeof p.temperature==='number')&&samplesOrdered(b.samples)&&reviewsOk(b.reviews);return s.version===1&&gapOk(s.gapMinutes)&&Array.isArray(s.recipes)&&Array.isArray(s.batches)&&s.recipes.every(r=>typeof r.id==='string'&&typeof r.name==='string'&&typeof r.target==='number'&&typeof r.tolerance==='number'&&typeof r.duration==='number')&&s.batches.every(batchOk)}
 export type CsvRow={line:number;time:string;temperature:number};
 const pad=(v:number)=>String(v).padStart(2,'0');
 const wallTime=(d:Date)=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
