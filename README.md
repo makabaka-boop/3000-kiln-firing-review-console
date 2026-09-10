@@ -41,4 +41,12 @@ curl http://localhost:8080/health
 docker compose down
 ```
 
-打开 <http://localhost:8080>。镜像采用 Node 构建、Nginx 提供静态站点，容器自带 `/health` 健康检查。
+默认打开 <http://localhost:8080>。如果端口已被占用，可覆盖宿主端口：
+
+```bash
+WEB_PORT=18080 docker compose up --build -d
+curl http://localhost:18080/health
+WEB_PORT=18080 docker compose down
+```
+
+镜像采用 Node 构建、Nginx 提供静态站点，容器自带 `/health` 健康检查。
