@@ -1,9 +1,10 @@
-import {describe,expect,it} from 'vitest';
-import {compareCurves,compareCandidates} from './data';
+import {afterEach,describe,expect,it} from 'vitest';
+import {compareCurves,compareCandidates,parseCsv,validPoints} from './data';
 import type {Batch,Sample,Store} from './types';
 
+function wallStamp(start:string,min:number){const d=new Date(Date.parse(start)+min*60000);const p=(v:number)=>String(v).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`}
 function mkBatch(id:string,start:string,samples:Array<[number,number]>,recipeId='r1'):Batch{
-  const s:Sample[]=samples.map(([min,temp])=>({time:new Date(Date.parse(start)+min*60000).toISOString().slice(0,16),temperature:temp}));
+  const s:Sample[]=samples.map(([min,temp])=>({time:wallStamp(start,min),temperature:temp}));
   return {id,name:id,kiln:'K1',recipeId,start,notes:'',samples:s,reviews:{}};
 }
 // 固定样本：两条曲线均为不等间隔采样
@@ -112,5 +113,28 @@ describe('对比候选批次',()=>{
       mkBatch('other-recipe',start,[[0,1],[1,2]],'r9'),
     ]};
     expect(compareCandidates(store,cur).map(b=>b.id)).toEqual(['same-ok']);
+  });
+});
+describe('时区：东八区 CSV 导入',()=>{
+  const oldTz=process.env.TZ;
+  afterEach(()=>{process.env.TZ=oldTz});
+  it('CSV 时刻按本地墙钟保存，对比经过分钟从 0 开始而非负数',()=>{
+    process.env.TZ='Asia/Shanghai';
+    const r=parseCsv('时间,温度\n2026-09-08 08:30,26\n2026-09-08 09:00,120');
+    expect(r.errors).toEqual([]);
+    expect(r.samples[0].time).toBe('2026-09-08T08:30');
+    expect(r.samples[1].time).toBe('2026-09-08T09:00');
+    const cur:Batch={id:'c',name:'c',kiln:'K',recipeId:'r1',start:'2026-09-08T08:30',notes:'',samples:r.samples,reviews:{}};
+    expect(validPoints(cur).map(p=>p.minute)).toEqual([0,30]);
+    const ref=mkBatch('r','2026-09-01T08:30',[[0,26],[30,120]]);
+    const out=compareCurves(cur,ref);
+    if(out.kind!=='ok')throw new Error('expected ok');
+    expect(out.nodes[0].minute).toBe(0);
+    expect(out.nodes[0].diff).toBe(0);
+  });
+  it('带时区偏移的时间字符串也按本地墙钟归一',()=>{
+    process.env.TZ='Asia/Shanghai';
+    const r=parseCsv('时间,温度\n2026-09-08T08:30+08:00,26');
+    expect(r.samples[0].time).toBe('2026-09-08T08:30');
   });
 });

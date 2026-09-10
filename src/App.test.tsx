@@ -134,6 +134,27 @@ describe('批次详情：同配方历史曲线对比主流程',()=>{
     expect(screen.queryByTestId('compare-summary')).toBeNull();
   });
 
+  it('选择参考批次后再编辑当前批次，对比选择继续保留',async()=>{
+    seed();
+    await openDetail();
+    fireEvent.change(screen.getByLabelText('参考批次'),{target:{value:'good'}});
+    await screen.findByTestId('compare-summary');
+    // 展开“编辑批次信息”并修改名称后保存（限定在详情面板，避开列表中的创建表单）
+    fireEvent.click(screen.getByText('编辑批次信息'));
+    const detail=document.querySelector('.detail')!;
+    const nameInput=detail.querySelector('input[name=name]') as HTMLInputElement;
+    fireEvent.change(nameInput,{target:{value:'当前批次-改名'}});
+    fireEvent.click(within(detail).getAllByRole('button',{name:'保存批次'})[0]);
+    // 参考选择与对比摘要仍在
+    expect((screen.getByLabelText('参考批次') as HTMLSelectElement).value).toBe('good');
+    expect(screen.getByTestId('compare-summary')).toBeInTheDocument();
+    expect(screen.getByTestId('reference-line')).toBeInTheDocument();
+    const saved:Store=JSON.parse(localStorage.getItem(STORE_KEY)!);
+    const b=saved.batches.find(x=>x.id==='cur')!;
+    expect(b.referenceBatchId).toBe('good');
+    expect(b.name).toBe('当前批次-改名');
+  });
+
   it('当前批次采样不足 2 点时不提供对比入口',async()=>{
     seed({batches:[few,good]});
     render(<App/>);
